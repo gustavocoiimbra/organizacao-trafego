@@ -6,7 +6,7 @@ from datetime import datetime
 import streamlit as st
 import os
 
-MODEL_SOURCE_PATH = r'runs\detect\train\weights\Detect-Accident-Non-Accident.pt' 
+MODEL_SOURCE_PATH = r'runs\detect\train\Detect-Accident-Non-Accident.pt' 
 
 # Definindo a largura e a altura dos frames
 LARGURA_FRAME = 640
@@ -86,7 +86,7 @@ def process_video(source_path: str | int = 0) -> None:
                             lista_classes[int(id_classe)]
                             + " "
                             + str(round(confianca, 3))
-                            + "%",
+                            + "",
                             (int(bb[0]), int(bb[1]) - 10),
                             fonte,
                             1,
@@ -100,7 +100,7 @@ def process_video(source_path: str | int = 0) -> None:
                             'horario': datetime.now(),
                             'frame': frame_count,
                             'classe': lista_classes[int(id_classe)],
-                            'confiança': confianca,
+                            'confiança': f"{confianca * 100:.2f}%",
                         }])
                         df = pd.concat([df, new_row], ignore_index=True)
                         
