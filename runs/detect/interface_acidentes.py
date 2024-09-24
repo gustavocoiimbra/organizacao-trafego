@@ -7,6 +7,8 @@ import streamlit as st
 import os
 import imageio
 import pydeck as pdk
+import numpy as np
+import tempfile
 
 MODEL_SOURCE_PATH = r'runs\detect\train\Detect-Accident-Non-Accident.pt'
 
@@ -27,13 +29,8 @@ lista_classes = list(model.model.names.values())
 # Obtendo o número máximo de classes detectadas pelo modelo
 num_classes = len(model.model.names)
 
-# Vamos gerar cores aleatórias para as classes
-cores_deteccao = []
-for i in range(num_classes):
-    r = random.randint(0, 255)
-    g = random.randint(0, 255)
-    b = random.randint(0, 255)
-    cores_deteccao.append((b, g, r))
+# Gerando cores aleatórias para as classes
+cores_deteccao = [(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)) for _ in range(num_classes)]
 
 # Inicializar DataFrame para armazenar os resultados e verificar se existe GIF na sessão
 if 'df' not in st.session_state:
@@ -44,6 +41,22 @@ if 'gif_path' not in st.session_state:
 
 if 'frames' not in st.session_state:
     st.session_state.frames = []
+
+def filtrar_bbox(df, threshold):
+    filtered_rows = []
+    for index, row in df.iterrows():
+        bb_current = row['bbox']
+        too_close = False
+        for f_row in filtered_rows:
+            bb_existing = f_row['bbox']
+            dist = np.sqrt((bb_current[0] - bb_existing[0])**2 + (bb_current[1] - bb_existing[1])**2)
+            if dist < threshold:
+                too_close = True
+                break
+        if not too_close:
+            filtered_rows.append(row)
+    
+    return pd.DataFrame(filtered_rows)
 
 def process_video(source_path: str | int = 0, limiar_confianca: float = 0.7) -> None:
     global frame_count
@@ -107,7 +120,7 @@ def process_video(source_path: str | int = 0, limiar_confianca: float = 0.7) -> 
                         2,
                     )
 
-                    # Adicionando os resultados ao DataFrame usando concat
+                    # Adicionando os resultados ao DataFrame original
                     new_row = pd.DataFrame([{
                         'local': 'Instituto de Informática, UFG Samambaia, Goiânia - GO',
                         'horario': datetime.now(),
@@ -115,8 +128,8 @@ def process_video(source_path: str | int = 0, limiar_confianca: float = 0.7) -> 
                         'classe': lista_classes[int(id_classe)],
                         'confiança': f"{confianca * 100:.2f}%",
                         'bbox': [int(bb[0]), int(bb[1]), int(bb[2]), int(bb[3])],
-                        'longitude': [-49.258588],
-                        'latitude': [-16.601805]
+                        'longitude': -49.266657,
+                        'latitude': -16.603084
                     }])
                     st.session_state.df = pd.concat([st.session_state.df, new_row], ignore_index=True)
 
@@ -141,7 +154,7 @@ def process_video(source_path: str | int = 0, limiar_confianca: float = 0.7) -> 
     return frames
 
 # Interface Streamlit
-st.title('Detecção de Acidentes em Vídeo')
+st.title('Detecção de Acidentes em Vídeo v3.0 (Beta)')
 
 # Adicionar um slider para o limiar de confiança
 limiar_confianca = st.slider(
@@ -187,31 +200,55 @@ if video_file is not None:
 
     # Exibir DataFrame ao final da detecção
     st.subheader('Resultados Brutos da Detecção')
-    st.dataframe(st.session_state.df, width=2000)  # Ajuste a largura conforme necessário
+    st.dataframe(st.session_state.df, width=2000)
 
-    # Adicionar botão de download para o DataFrame
-    csv = st.session_state.df.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="Baixar Resultados Brutos como CSV",
-        data=csv,
-        file_name='resultados_brutos_deteccao.csv',
-        mime='text/csv',
-    )
+    # Adicionar botão de download para o DataFrame original
+    csv_bruto = st.session_state.df.to_csv(index=False)
+    st.download_button(label="Baixar Detecções Brutas", data=csv_bruto, file_name="detecções_brutas.csv", mime="text/csv")
+    
+    # Slider para ajustar o threshold
+    threshold_distancia = st.slider('Distância entre Caixas de Detecção', 0, 200, 50, 1)
+    
+    # Filtrar o DataFrame para remover bbox muito próximas
+    df_filtrado = filtrar_bbox(st.session_state.df, threshold_distancia)
+    
+    st.subheader('Acidentes Únicos')
+    st.dataframe(df_filtrado, width=2000)
+    # Converter as colunas para tipo numérico (float)
+    df_filtrado['latitude'] = pd.to_numeric(df_filtrado['latitude'], errors='coerce')
+    df_filtrado['longitude'] = pd.to_numeric(df_filtrado['longitude'], errors='coerce')
 
+    csv_filtrado = df_filtrado.to_csv(index=False)
+    st.download_button(label="Baixar Acidentes Únicos", data=csv_filtrado, file_name="detecções_filtradas.csv", mime="text/csv")
+    
     # Remover o vídeo temporário
     os.remove('temp_video.mp4')
     
-    # --- Adicionando o Mapa de Calor ---
     st.subheader('Mapa de Calor dos Locais de Acidentes')
     
-    st.pydeck_chart(
-        pdk.Deck(
+    # Mapa de calor usando as coordenadas filtradas
+    if not df_filtrado.empty:
+        # Criar o gráfico do mapa de calor
+        deck = pdk.Deck(
             map_style=None,
             initial_view_state=pdk.ViewState(
-                latitude=-16.603084, #Local da câmera
-                longitude=-49.266657, #Local da câmera
+                latitude=-16.603084,
+                longitude=-49.266657,
                 zoom=17,
                 pitch=50,
             ),
+            layers=[
+                pdk.Layer(
+                    "HeatmapLayer",
+                    data=df_filtrado,
+                    get_position="[longitude, latitude]",
+                    radius=20,
+                    elevation_scale=4,
+                    elevation_range=[0, 1000],
+                    opacity=0.9,
+                ),
+            ],
         )
-    )
+
+        # Exibir o mapa no Streamlit
+        st.pydeck_chart(deck)
